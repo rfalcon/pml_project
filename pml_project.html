@@ -610,7 +610,70 @@ kable(data.frame(selectedFeatures))</code></pre>
 </tbody>
 </table>
 <p>Notice that all the decision-tree-based models except the boosted tree (i.e., RF, WSRF and C5.0) achieved very high classification accuracy rates (above 97% and with robust 95% confidence intervals) and that the three neural-network-based models performed really poorly. It is worthwhile noticing that KNN with k = 5 attained 93% accuracy despite the lack of any training process for this lazy learner. Ada and AdaBoost did slightly better than the two SVM-based methods.</p>
-<p>We selected <strong>Random Forest</strong> as our classification method of choice for predicting the activity quality in the validation set given its good results and well-deserved popularity in challenging competitions.</p>
+<p>The out-of-sample error for each method (as estimated via cross-validation) is given below:</p>
+<table>
+<thead>
+<tr class="header">
+<th align="left"></th>
+<th align="right">OutOfSampleError</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">RF</td>
+<td align="right">0.0265090</td>
+</tr>
+<tr class="even">
+<td align="left">WSRF</td>
+<td align="right">0.0291599</td>
+</tr>
+<tr class="odd">
+<td align="left">Ada</td>
+<td align="right">0.1294861</td>
+</tr>
+<tr class="even">
+<td align="left">AdaBoost</td>
+<td align="right">0.1294861</td>
+</tr>
+<tr class="odd">
+<td align="left">BoostedTree</td>
+<td align="right">0.6180669</td>
+</tr>
+<tr class="even">
+<td align="left">C5.0</td>
+<td align="right">0.0261011</td>
+</tr>
+<tr class="odd">
+<td align="left">LVQ</td>
+<td align="right">0.4424959</td>
+</tr>
+<tr class="even">
+<td align="left">MLP</td>
+<td align="right">0.7155383</td>
+</tr>
+<tr class="odd">
+<td align="left">RBFN</td>
+<td align="right">0.7137031</td>
+</tr>
+<tr class="even">
+<td align="left">DNN</td>
+<td align="right">0.7112561</td>
+</tr>
+<tr class="odd">
+<td align="left">KNN</td>
+<td align="right">0.0668842</td>
+</tr>
+<tr class="even">
+<td align="left">LSSVMRadial</td>
+<td align="right">0.1977977</td>
+</tr>
+<tr class="odd">
+<td align="left">SVMPoly</td>
+<td align="right">0.1435563</td>
+</tr>
+</tbody>
+</table>
+<p>We selected <strong>Random Forest</strong> as our classification method of choice for predicting the activity quality in the validation set given its lowest out-of-sample error estimate and its well-deserved popularity in challenging competitions.</p>
 </div>
 <div id="results" class="section level2">
 <h2>Results</h2>
