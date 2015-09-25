@@ -252,7 +252,12 @@ kable(perfMetrics[,1:4])
 
 Notice that all the decision-tree-based models except the boosted tree (i.e., RF, WSRF and C5.0) achieved very high classification accuracy rates (above 97% and with robust 95% confidence intervals) and that the three neural-network-based models performed really poorly. It is worthwhile noticing that KNN with k = 5 attained 93% accuracy despite the lack of any training process for this lazy learner. Ada and AdaBoost did slightly better than the two SVM-based methods.
 
-We selected **Random Forest** as our classification method of choice for predicting the activity quality in the validation set given its good results and well-deserved popularity in challenging competitions.
+The out-of-sample error for each method (as estimated via cross-validation) is given below:
+```{r OOSError, echo=FALSE}
+kable(data.frame(OutOfSampleError = 1-perfMetrics[,1]))
+```
+
+We selected **Random Forest** as our classification method of choice for predicting the activity quality in the validation set given its lowest out-of-sample error estimate and its well-deserved popularity in challenging competitions.
 
 ## Results  
 
