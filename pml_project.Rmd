@@ -1,0 +1,265 @@
+---
+title: "Recognizing Weight Lifting Quality - PML Project"
+author: "rfalcon"
+date: "Wednesday, September 22, 2015"
+output: html_document
+graphics: yes
+---
+
+# Executive summary
+
+We are given training and testing data coming from accelerometers on the belt, forearm, arm, and dumbell of six participants in a weight lifting exercise. Our goal is to predict the manner in which they did the exercise, either correctly (class A) or incorrectly (classes B-E). **The results of our study indicate that ...**
+
+# Analysis and discussion
+
+## 1. Getting and cleaning data
+
+We read the training and test sets as CSV files. Notice that missing values are denoted by either blank entries or those with "NA" or "#DIV/0!". 
+
+```{r options, echo=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+set.seed(12345)
+opts_chunk$set(cache=TRUE, cache.path = 'pml_project_cache/', fig.path='figure/', fig.align='center')
+source("trainModel.R")
+```
+
+```{r loadData}
+dataSet <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+validationSet <- read.csv("pml-testing.csv", na.strings = c("NA", "#DIV/0!", ""))
+rbind(dim(dataSet), dim(validationSet))
+```
+
+Then we remove those columns that only contain missing values:
+
+```{r removeNullColumns}
+dataSet <- dataSet[,colSums(is.na(dataSet)) == 0]
+validationSet <- validationSet[,colSums(is.na(validationSet)) == 0]
+rbind(dim(dataSet), dim(validationSet))
+```
+
+This step dramatically shortened the number of features from 160 to 60. As shown below, no other feature in either dataset has missing values.
+
+```{r checkforNAValues}
+c(any(colSums(is.na(dataSet)) > 0),any(colSums(is.na(validationSet)) > 0))
+```
+
+Next, we remove the first 7 features in the dataset as these are housekeeping features like user\_name, raw\_timestamp, etc. Although this is time series data, our validation set only consists of individual snapshots; hence, it is better to treat each record as an independent entry for prediction purposes.
+
+```{r removeHousekeepingFeatures}
+dataSet <- dataSet[,-(1:7)]
+dim(dataSet)
+```
+
+Next, we remove the 4 summary features that start with "total", since any predictive information they contain is already embodied in the measurement data. 
+
+```{r removeSummaryFeatures}
+dataSet <- dataSet[,-grep("total",names(dataSet))]
+dim(dataSet)
+```
+
+At this point, there are no near-zero-variance features in the dataset that could be further removed.
+
+```{r removeNearZeroVarFeatures, message=FALSE, warning=FALSE}
+library(caret)
+any(nearZeroVar(dataSet))
+```
+
+Additionally, all predictive features are numeric (including integers) and none has a nominal nature.
+
+```{r allNumericFeatures}
+unique(sapply(dataSet[,-49], class))
+```
+
+We have narrowed down our data from 160 to 49 features. Yet it is still possible to remove redundant features and thus simplify the downstream model. Let us try removing those features that are highly correlated with one another.
+
+```{r removeHighlyCorrelatedFeatures}
+correlationMatrix <- cor(dataSet[,-49])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.8)
+highlyCorrelated
+dataSet <- dataSet[,-highlyCorrelated]
+dim(dataSet)
+```
+
+## 2. Data slicing
+
+Let us slice the dataset into 75% training data and 25% for testing. We will build different models on the training data via repeated 10-fold cross validation and evaluate their performance on the test data.
+
+```{r dataSlicing}
+inTrain <- createDataPartition(y=dataSet$classe, p=0.75, list=FALSE)
+trainingSet <- dataSet[inTrain,]
+testingSet <- dataSet[-inTrain,]
+```
+
+## 3. Feature selection
+
+To further reduce the 36 remaining predictors, we will rely on the 'mean decrease in accuracy' and 'mean decrease in node impurity' variable importance metrics calculated by a random forest of 500 trees applied to the training set over a 10-fold cross validation. Important features will be those with high values in both metrics. Figure 1 displays these values.
+
+```{r calculateVariableImportance, message=FALSE, warning=FALSE}
+library(randomForest)
+library(ggplot2)
+
+if (file.exists("rffs.mda")) {
+  load("rffs.mda")
+} else {
+  mdlRFFS <- randomForest(classe ~ ., data=trainingSet, mtry=6, importance=TRUE)
+  save(mdlRFFS, file="rffs.mda")
+}
+  
+featureImportance <- importance(mdlRFFS)
+varImpPlot(mdlRFFS, main="Feature Importance Metrics")
+```
+
+<center> **Fig. 1. Feature importance as determined by a random forest of 500 trees** </center>
+<br>
+
+We will take the average rank of each feature across both metrics to decide on their importance as we want to retain features with high discriminatory power that also contributed to purer nodes. 
+
+```{r computeCombinedFeatureImportance, message=FALSE, warning=FALSE}
+library(knitr)
+featureRanks <- sort((rank(1/featureImportance[,6]) + rank(1/featureImportance[,7]))/2)
+kable(data.frame(rank = featureRanks), format = "html")
+```
+  
+<br>
+
+We will build our model with the top 25% ranked features, as shown below:
+
+```{r selectedFeatures}
+selectedFeatures <- featureRanks[featureRanks <= quantile(featureRanks)[2]]
+trainingSet <- trainingSet[, c(names(selectedFeatures), "classe")]
+kable(data.frame(selectedFeatures))
+```
+
+## 4. Model selection
+
+For the experimental analysis, we have selected 13 different classification models belonging to 7 different families, as shown below:
+
+1. bagging models (Random Forests ***RF***, Weighted Subspace Random Forest ***WSRF***)
+2. boosting models (***ADA***, ***AdaBoost***, ***BoostedTree***)
+3. decision tree models (***C5.0***)
+4. prototype-based models (Learning Vector Quantization ***LVQ***)
+5. neural network models (Multilayer Perceptron ***MLP***, Radial Basis Function Neural Network ***RBFN***, Stacked Autoencoder Deep Neural Network ***DNN***)
+6. instance-based models (K Nearest Neighbor ***KNN***)
+7. kernel-based models (Least-Squares Support Vector Machine with Radial Basis Function Kernel ***LSSVMRadial***, Support Vector Machine with Polynomial Kernel ***SVMPoly*** )
+
+The out-of-sample error is estimated via repeating 10-fold cross validation over the training set 3 times. The *train* function in the *caret* package allows selecting the most suitable parametric configuration for each model using a grid-search approach. By default, the best parametric configuration is the one that maximizes the underlying performance metric, *classification accuracy* in this case.
+
+```{r trainRFModel, message=FALSE, warning=FALSE, echo=FALSE}
+# library(parallel, quietly=T)
+# library(doParallel, quietly=T)
+# 
+# mdlTrainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+# 
+# trainModel("rf", "rf9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlRF9")) mdlRF9 <- trainModel
+# cmRF9 <- confusionMatrix(predict(mdlRF9, testingSet), testingSet$classe)
+```
+
+```{r trainLVQModel, echo=FALSE}
+# trainModel("lvq", "lvq9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlLVQ9")) mdlLVQ9 <- trainModel
+```
+
+```{r trainAdaBoostModel, echo=FALSE}
+# trainModel("AdaBoost.M1", "adaboost9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlAdaBoost9")) mdlAdaBoost9 <- trainModel
+```
+
+```{r trainAdaModel, echo=FALSE}
+# trainModel("ada", "ada9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlAda9")) mdlAda9 <- trainModel
+# cmAda9 <- caret::confusionMatrix(predict(mdlAda9, testingSet), testingSet$classe)
+```
+
+```{r trainBoostedTree, echo=FALSE}
+# trainModel("bstTree", "bstTree9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlBoostedTree9")) mdlBoostedTree9 <- trainModel
+```
+
+```{r trainC5.0, echo=FALSE}
+# source("trainModel.R")
+# trainModel("C5.0", "C509attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlC509")) mdlC509 <- trainModel
+```
+
+```{r trainWeightedSubspaceRandomForest, echo=FALSE}
+# source("trainModel.R")
+# trainModel("wsrf", "wsrf9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlWSRF9")) mdlWSRF9 <- trainModel
+# cmWSRF9 <- caret::confusionMatrix(predict(mdlWSRF9, testingSet), testingSet$classe)
+```
+
+```{r trainLeastSquaresSVMwithRBFKernel, echo=FALSE}
+# source("trainModel.R")
+# trainModel("lssvmRadial", "lssvmRadial9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlLSSVMRadial9")) mdlLSSVMRadial9 <- trainModel
+```
+
+```{r trainSVMwithPolyKernel, echo=FALSE}
+# source("trainModel.R")
+# trainModel("svmPoly", "svmPoly9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlSVMPoly9")) mdlSVMPoly9 <- trainModel
+```
+
+```{r trainMLP, echo=FALSE}
+# source("trainModel.R")
+# trainModel("mlp", "mlp9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlMLP9")) mdlMLP9 <- trainModel
+```
+
+```{r trainRBFN, echo=FALSE}
+# source("trainModel.R")
+# trainModel("rbf", "rbf9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlRBFN9")) mdlRBFN9 <- trainModel
+```
+
+```{r trainDNN, echo=FALSE}
+# source("trainModel.R")
+# trainModel("dnn", "dnn9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlDNN9")) mdlDNN9 <- trainModel
+```
+
+```{r trainKNN, echo=FALSE}
+# source("trainModel.R")
+# trainModel("knn", "knn9attr.rda", trainingSet, mdlTrainControl)
+# if (!exists("mdlKNN9")) mdlKNN9 <- trainModel
+```
+
+The following table contains the performance metrics (in terms of classification accuracy, its 95% confidence interval and the Kappa statistic) of all classifiers under consideration.
+
+```{r test, warning=T, echo=FALSE}
+load("metrics.rda")
+kable(perfMetrics[,1:4])
+
+# 
+
+# cmAdaBoost9 <- caret::confusionMatrix(predict(mdlAdaBoost9, testingSet), testingSet$classe)
+# cmBoostedTree9 <- caret::confusionMatrix(predict(mdlBoostedTree9, testingSet), testingSet$classe)
+# 
+# cmC509 <- caret::confusionMatrix(predict(mdlC509, testingSet), testingSet$classe)
+# 
+# cmLVQ9 <- caret::confusionMatrix(predict(mdlLVQ9, testingSet), testingSet$classe)
+# 
+# cmMLP9 <- caret::confusionMatrix(predict(mdlMLP9, testingSet), testingSet$classe)
+# cmRBFN9 <- caret::confusionMatrix(predict(mdlRBFN9, testingSet), testingSet$classe)
+# cmDNN9 <- caret::confusionMatrix(predict(mdlDNN9, testingSet), testingSet$classe)
+# 
+# cmKNN9 <- caret::confusionMatrix(predict(mdlKNN9, testingSet), testingSet$classe)
+# 
+# cmLSSVMRadial9 <- caret::confusionMatrix(predict(mdlLSSVMRadial9, testingSet), testingSet$classe)
+# cmSVMPoly9 <- caret::confusionMatrix(predict(mdlSVMPoly9, testingSet), testingSet$classe)
+```
+
+Notice that all the decision-tree-based models except the boosted tree (i.e., RF, WSRF and C5.0) achieved very high classification accuracy rates (above 97% and with robust 95% confidence intervals) and that the three neural-network-based models performed really poorly. It is worthwhile noticing that KNN with k = 5 attained 93% accuracy despite the lack of any training process for this lazy learner. Ada and AdaBoost did slightly better than the two SVM-based methods.
+
+We selected **Random Forest** as our classification method of choice for predicting the activity quality in the validation set given its good results and well-deserved popularity in challenging competitions.
+
+## Results  
+
+RF did not disappoint us: it nailed every prediction right except cases 1 and 14. RF wrongly predicted class 'D' for instance 1 and class 'A' for instance 14.  
+
+Interestingly, every other classifier agreed with this prediction as well except the three neural-network-based models which predicted 'A'-'A' (also wrong) and BoostedTree which predicted 'B'-'A'. 
+
+Well, BoostedTree nailed the instance #1 but none of the 13 classifiers under consideration were able to suggest another class for instance 14 other than 'A'.
+
+So we got an accuracy rate on the validation set of 19/20.
